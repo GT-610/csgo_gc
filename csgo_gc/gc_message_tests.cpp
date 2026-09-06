@@ -302,6 +302,31 @@ static bool HostMessageNotReceived(ClientGC &gc, uint32_t type,
     return true;
 }
 
+static bool HostMessageOrNetMessageNotReceived(ClientGC &gc, uint32_t type,
+    std::chrono::milliseconds duration = std::chrono::milliseconds{ 100 })
+{
+    std::vector<EventData> events;
+    auto deadline = std::chrono::steady_clock::now() + duration;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        gc.GetHostEvents(events);
+        for (const EventData &event : events)
+        {
+            if ((event.type == static_cast<int>(HostEvent::Message)
+                    || event.type == static_cast<int>(HostEvent::NetMessage))
+                && (event.id & ~ProtobufMask) == type)
+            {
+                return false;
+            }
+        }
+
+        events.clear();
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+    }
+
+    return true;
+}
+
 template<typename T>
 static bool ParseHostProtobuf(const EventData &event, T &message)
 {
@@ -2702,7 +2727,7 @@ static bool SeasonalMissionCardSelectionValidatesAndPersists()
         missionRequest.set_mission_id(9051);
         SendGCProtobuf(gc,
             k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
-        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+        valid &= HostMessageOrNetMessageNotReceived(gc, k_ESOMsg_Update);
 
         CMsgUseItem passRequest;
         passRequest.set_item_id(passId);
@@ -2714,13 +2739,13 @@ static bool SeasonalMissionCardSelectionValidatesAndPersists()
         missionRequest.set_campaign_id(9);
         SendGCProtobuf(gc,
             k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
-        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+        valid &= HostMessageOrNetMessageNotReceived(gc, k_ESOMsg_Update);
 
         missionRequest.set_campaign_id(10);
         missionRequest.set_mission_id(9999);
         SendGCProtobuf(gc,
             k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
-        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+        valid &= HostMessageOrNetMessageNotReceived(gc, k_ESOMsg_Update);
 
         missionRequest.set_mission_id(9052);
         SendGCProtobuf(gc,
@@ -2733,7 +2758,7 @@ static bool SeasonalMissionCardSelectionValidatesAndPersists()
 
         SendGCProtobuf(gc,
             k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
-        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+        valid &= HostMessageOrNetMessageNotReceived(gc, k_ESOMsg_Update);
     }
 
     {

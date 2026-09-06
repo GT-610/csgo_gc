@@ -1029,7 +1029,6 @@ void ItemSchema::ParseSeasonalOperations(const KeyValue *seasonalOperationsKey)
     for (const KeyValue &operationKey : *seasonalOperationsKey)
     {
         const uint32_t seasonValue = FromString<uint32_t>(operationKey.Name());
-        std::vector<uint32_t> &missionCards = m_missionCardsBySeason[seasonValue];
         for (const KeyValue &entry : operationKey)
         {
             if (entry.Name() != "quest_mission_card")
@@ -1038,9 +1037,14 @@ void ItemSchema::ParseSeasonalOperations(const KeyValue *seasonalOperationsKey)
             }
 
             const uint32_t missionCardId = entry.GetNumber<uint32_t>("id");
-            if (missionCardId
-                && std::find(missionCards.begin(), missionCards.end(), missionCardId)
-                    == missionCards.end())
+            if (!missionCardId)
+            {
+                continue;
+            }
+
+            std::vector<uint32_t> &missionCards = m_missionCardsBySeason[seasonValue];
+            if (std::find(missionCards.begin(), missionCards.end(), missionCardId)
+                == missionCards.end())
             {
                 missionCards.push_back(missionCardId);
             }

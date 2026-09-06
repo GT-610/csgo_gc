@@ -272,6 +272,8 @@ public:
         riptide.AddSubkey("quest_mission_card").AddNumber("id", 9051);
         riptide.AddSubkey("quest_mission_card").AddNumber("id", 9052);
         riptide.AddString("xp_reward", "7,11,15");
+        seasonalOperations.AddSubkey("11").AddString("xp_reward", "7,11,15");
+        seasonalOperations.AddSubkey("12").AddSubkey("quest_mission_card").AddNumber("id", 0);
         schema.ParseSeasonalOperations(&seasonalOperations);
 
         std::optional<SeasonPassInfo> info = schema.SeasonPassByDefIndex(4758);
@@ -282,7 +284,9 @@ public:
             && schema.IsSeasonalMissionCard(10, 9051)
             && schema.IsSeasonalMissionCard(10, 9052)
             && !schema.IsSeasonalMissionCard(10, 9053)
-            && !schema.IsSeasonalMissionCard(9, 9051);
+            && !schema.IsSeasonalMissionCard(9, 9051)
+            && schema.m_missionCardsBySeason.find(11) == schema.m_missionCardsBySeason.end()
+            && schema.m_missionCardsBySeason.find(12) == schema.m_missionCardsBySeason.end();
     }
 
     ItemSchema schema;
