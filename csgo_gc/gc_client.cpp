@@ -993,6 +993,10 @@ void ClientGC::HandleMessage(uint32_t type, const void *data, uint32_t size)
             UseItemRequest(messageRead);
             break;
 
+        case k_EMsgGCCStrike15_v2_ClientRequestNewMission:
+            ClientRequestNewMission(messageRead);
+            break;
+
         case k_EMsgGCCStrike15_v2_ClientRequestJoinServerData:
             ClientRequestJoinServerData(messageRead);
             break;
@@ -1541,12 +1545,37 @@ void ClientGC::UseItemRequest(GCMessageRead &messageRead)
                     ? k_ESOMsg_Create : k_ESOMsg_Update,
                 result.itemData);
         }
+        if (result.operationChange != Inventory::UseItemChange::None)
+        {
+            SendMessageToGame(true,
+                result.operationChange == Inventory::UseItemChange::Create
+                    ? k_ESOMsg_Create : k_ESOMsg_Update,
+                result.operationData);
+        }
         if (result.updateMultiple.objects_modified_size())
         {
             SendMessageToGame(true, k_ESOMsg_UpdateMultiple, result.updateMultiple);
         }
 
         SendMessageToGame(false, k_EMsgGCItemCustomizationNotification, result.notification);
+    }
+}
+
+void ClientGC::ClientRequestNewMission(GCMessageRead &messageRead)
+{
+    CMsgGCCstrike15_v2_ClientRequestNewMission request;
+    if (!messageRead.ReadProtobuf(request))
+    {
+        Platform::Print("Parsing CMsgGCCstrike15_v2_ClientRequestNewMission failed, ignoring\n");
+        return;
+    }
+
+    CMsgSOSingleObject update;
+    if (m_inventory.SelectSeasonalMissionCard(
+            request.campaign_id(), request.mission_id(), update)
+        && update.has_object_data())
+    {
+        SendMessageToGame(true, k_ESOMsg_Update, update);
     }
 }
 

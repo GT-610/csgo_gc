@@ -161,6 +161,12 @@ ItemSchema::ItemSchema(bool loadFiles)
         ParseItems(itemsKey, itemsGame->GetSubkey("prefabs"));
     }
 
+    const KeyValue *seasonalOperationsKey = itemsGame->GetSubkey("seasonaloperations");
+    if (seasonalOperationsKey)
+    {
+        ParseSeasonalOperations(seasonalOperationsKey);
+    }
+
     const KeyValue *stickerKitsKey = itemsGame->GetSubkey("sticker_kits");
     if (stickerKitsKey)
     {
@@ -749,13 +755,21 @@ void ItemSchema::ParseItems(const KeyValue *itemsKey, const KeyValue *prefabsKey
 
         ParseItemRecursive(emplace.first->second, itemKey, prefabsKey);
 
-        if (!emplace.first->second.m_name.empty())
+        auto &itemInfo = emplace.first->second;
+
+        if (!itemInfo.m_name.empty())
         {
-            m_itemDefIndexByName[emplace.first->second.m_name] = defIndex;
+            m_itemDefIndexByName[itemInfo.m_name] = defIndex;
+        }
+
+        if (itemInfo.m_seasonAccess && itemInfo.m_level == 1
+            && std::find(itemInfo.m_prefabs.begin(), itemInfo.m_prefabs.end(), "operation_coin")
+                != itemInfo.m_prefabs.end())
+        {
+            m_operationCoinDefIndexBySeason.try_emplace(*itemInfo.m_seasonAccess, defIndex);
         }
 
         // FIXME: remove, temp slop to make sure we parse correctly
-        auto &itemInfo = emplace.first->second;
         if (itemInfo.m_isCoupon)
         {
             assert(itemInfo.m_lootListName.size());
@@ -932,6 +946,12 @@ void ItemSchema::ParseItemRecursive(ItemInfo &info, const KeyValue &itemKey, con
     const KeyValue *tool = itemKey.GetSubkey("tool");
     if (tool)
     {
+        std::string_view type = tool->GetString("type");
+        if (type.size())
+        {
+            info.m_toolType = type;
+        }
+
         std::string_view restriction = tool->GetString("restriction");
         if (restriction.size())
         {
@@ -942,6 +962,12 @@ void ItemSchema::ParseItemRecursive(ItemInfo &info, const KeyValue &itemKey, con
     const KeyValue *attributes = itemKey.GetSubkey("attributes");
     if (attributes)
     {
+        const KeyValue *seasonAccess = attributes->GetSubkey("season access");
+        if (seasonAccess)
+        {
+            info.m_seasonAccess = FromString<uint32_t>(seasonAccess->String());
+        }
+
         info.m_prestigeYear = attributes->GetNumber<uint32_t>(
             "prestige year", info.m_prestigeYear);
 
@@ -993,6 +1019,34 @@ void ItemSchema::ParseItemRecursive(ItemInfo &info, const KeyValue &itemKey, con
             else
             {
                 info.m_generatedAttributes.push_back({ defIndex->second, value });
+            }
+        }
+    }
+}
+
+void ItemSchema::ParseSeasonalOperations(const KeyValue *seasonalOperationsKey)
+{
+    for (const KeyValue &operationKey : *seasonalOperationsKey)
+    {
+        const uint32_t seasonValue = FromString<uint32_t>(operationKey.Name());
+        for (const KeyValue &entry : operationKey)
+        {
+            if (entry.Name() != "quest_mission_card")
+            {
+                continue;
+            }
+
+            const uint32_t missionCardId = entry.GetNumber<uint32_t>("id");
+            if (!missionCardId)
+            {
+                continue;
+            }
+
+            std::vector<uint32_t> &missionCards = m_missionCardsBySeason[seasonValue];
+            if (std::find(missionCards.begin(), missionCards.end(), missionCardId)
+                == missionCards.end())
+            {
+                missionCards.push_back(missionCardId);
             }
         }
     }
@@ -1443,6 +1497,35 @@ std::optional<TournamentAccessInfo> ItemSchema::TournamentAccessByDefIndex(uint3
 
     result.journalDefIndex = journal->m_defIndex;
     return result;
+}
+
+std::optional<SeasonPassInfo> ItemSchema::SeasonPassByDefIndex(uint32_t defIndex) const
+{
+    const ItemInfo *pass = ItemInfoByDefIndex(defIndex);
+    if (!pass || pass->m_toolType != "season_pass" || !pass->m_seasonAccess)
+    {
+        return std::nullopt;
+    }
+
+    auto coin = m_operationCoinDefIndexBySeason.find(*pass->m_seasonAccess);
+    if (coin == m_operationCoinDefIndexBySeason.end())
+    {
+        return std::nullopt;
+    }
+
+    return SeasonPassInfo{ *pass->m_seasonAccess, coin->second };
+}
+
+bool ItemSchema::IsSeasonalMissionCard(uint32_t seasonValue, uint32_t missionCardId) const
+{
+    auto operation = m_missionCardsBySeason.find(seasonValue);
+    if (operation == m_missionCardsBySeason.end())
+    {
+        return false;
+    }
+
+    return std::find(operation->second.begin(), operation->second.end(), missionCardId)
+        != operation->second.end();
 }
 
 StickerKitInfo *ItemSchema::MutableStickerKitInfoByName(std::string_view name)

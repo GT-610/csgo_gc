@@ -188,6 +188,12 @@ bool Inventory::HasItemDefinition(uint32_t defIndex) const
     });
 }
 
+const CSOAccountSeasonalOperation *Inventory::GetSeasonalOperation(uint32_t seasonValue) const
+{
+    auto operation = m_seasonalOperations.find(seasonValue);
+    return operation == m_seasonalOperations.end() ? nullptr : &operation->second;
+}
+
 std::optional<Inventory::PrestigeMedalPlan> Inventory::GetPrestigeMedalPlan(uint32_t year) const
 {
     std::vector<uint32_t> defIndexes = m_itemSchema.PrestigeMedalDefIndexes(year);
@@ -417,6 +423,42 @@ void Inventory::ReadFromFile()
         DeduplicateStatsSubscriptions();
     }
 
+    const KeyValue *seasonalOperationsKey = inventoryKey.GetSubkey("seasonal_operations");
+    if (seasonalOperationsKey)
+    {
+        for (const KeyValue &operationKey : *seasonalOperationsKey)
+        {
+            const uint32_t seasonValue = FromString<uint32_t>(operationKey.Name());
+            CSOAccountSeasonalOperation &operation = m_seasonalOperations[seasonValue];
+            operation.set_season_value(seasonValue);
+
+            if (operationKey.GetSubkey("tier_unlocked"))
+            {
+                operation.set_tier_unlocked(operationKey.GetNumber<uint32_t>("tier_unlocked"));
+            }
+            if (operationKey.GetSubkey("premium_tiers"))
+            {
+                operation.set_premium_tiers(operationKey.GetNumber<uint32_t>("premium_tiers"));
+            }
+            if (operationKey.GetSubkey("mission_id"))
+            {
+                operation.set_mission_id(operationKey.GetNumber<uint32_t>("mission_id"));
+            }
+            if (operationKey.GetSubkey("missions_completed"))
+            {
+                operation.set_missions_completed(operationKey.GetNumber<uint32_t>("missions_completed"));
+            }
+            if (operationKey.GetSubkey("redeemable_balance"))
+            {
+                operation.set_redeemable_balance(operationKey.GetNumber<uint32_t>("redeemable_balance"));
+            }
+            if (operationKey.GetSubkey("season_pass_time"))
+            {
+                operation.set_season_pass_time(operationKey.GetNumber<uint32_t>("season_pass_time"));
+            }
+        }
+    }
+
     const KeyValue *defaultEquipsKey = inventoryKey.GetSubkey("default_equips");
     if (defaultEquipsKey)
     {
@@ -572,6 +614,38 @@ bool Inventory::WriteToFile() const
     }
 
     {
+        KeyValue &seasonalOperationsKey = inventoryKey.AddSubkey("seasonal_operations");
+        for (const auto &[seasonValue, operation] : m_seasonalOperations)
+        {
+            KeyValue &operationKey = seasonalOperationsKey.AddSubkey(std::to_string(seasonValue));
+            if (operation.has_tier_unlocked())
+            {
+                operationKey.AddNumber("tier_unlocked", operation.tier_unlocked());
+            }
+            if (operation.has_premium_tiers())
+            {
+                operationKey.AddNumber("premium_tiers", operation.premium_tiers());
+            }
+            if (operation.has_mission_id())
+            {
+                operationKey.AddNumber("mission_id", operation.mission_id());
+            }
+            if (operation.has_missions_completed())
+            {
+                operationKey.AddNumber("missions_completed", operation.missions_completed());
+            }
+            if (operation.has_redeemable_balance())
+            {
+                operationKey.AddNumber("redeemable_balance", operation.redeemable_balance());
+            }
+            if (operation.has_season_pass_time())
+            {
+                operationKey.AddNumber("season_pass_time", operation.season_pass_time());
+            }
+        }
+    }
+
+    {
         KeyValue &defaultEquipsKey = inventoryKey.AddSubkey("default_equips");
 
         for (const CSOEconDefaultEquippedDefinitionInstanceClient &defaultEquip : m_defaultEquips)
@@ -695,6 +769,17 @@ void Inventory::BuildCacheSubscription(CMsgSOCacheSubscribed &message, bool serv
         CMsgSOCacheSubscribed_SubscribedType *object = message.add_objects();
         object->set_type_id(SOTypePersonaDataPublic);
         object->add_object_data(personaData.SerializeAsString());
+    }
+
+    if (!m_seasonalOperations.empty())
+    {
+        CMsgSOCacheSubscribed_SubscribedType *object = message.add_objects();
+        object->set_type_id(SOTypeAccountSeasonalOperation);
+        for (const auto &entry : m_seasonalOperations)
+        {
+            const CSOAccountSeasonalOperation &operation = entry.second;
+            object->add_object_data(operation.SerializeAsString());
+        }
     }
 
     if (!server)
@@ -940,6 +1025,12 @@ bool Inventory::UseItem(uint64_t itemId, UseItemResult &result)
         return ActivateTournamentAccessItem(it, *access, result);
     }
 
+    if (std::optional<SeasonPassInfo> pass
+        = m_itemSchema.SeasonPassByDefIndex(it->second.def_index()))
+    {
+        return ActivateSeasonPassItem(it, *pass, result);
+    }
+
     if (it->second.def_index() != ItemSchema::ItemSpray)
     {
         assert(false);
@@ -966,6 +1057,93 @@ bool Inventory::UseItem(uint64_t itemId, UseItemResult &result)
     result.notification.set_request(k_EGCItemCustomizationNotification_GraffitiUnseal);
 
     return true;
+}
+
+bool Inventory::SelectSeasonalMissionCard(uint32_t seasonValue,
+    uint32_t missionCardId, CMsgSOSingleObject &update)
+{
+    auto operation = m_seasonalOperations.find(seasonValue);
+    if (operation == m_seasonalOperations.end()
+        || !m_itemSchema.IsSeasonalMissionCard(seasonValue, missionCardId))
+    {
+        return false;
+    }
+
+    if (operation->second.mission_id() == missionCardId)
+    {
+        return true;
+    }
+
+    const uint64_t previousVersion = m_version;
+    const CSOAccountSeasonalOperation previousOperation = operation->second;
+    operation->second.set_mission_id(missionCardId);
+    ToSingleObject(update, SOTypeAccountSeasonalOperation, operation->second);
+
+    if (WriteToFile())
+    {
+        return true;
+    }
+
+    operation->second = previousOperation;
+    m_version = previousVersion;
+    update.Clear();
+    return false;
+}
+
+bool Inventory::ActivateSeasonPassItem(ItemMap::iterator passItem,
+    const SeasonPassInfo &pass, UseItemResult &result)
+{
+    if (m_seasonalOperations.contains(pass.seasonValue)
+        || HasItemDefinition(pass.coinDefIndex))
+    {
+        return false;
+    }
+
+    const uint64_t previousVersion = m_version;
+    const uint32_t previousLastHighItemId = m_lastHighItemId;
+    const CSOEconItem previousPassItem = passItem->second;
+
+    CSOEconItem &coin = CreateItem(pass.coinDefIndex,
+        ItemOriginPurchased, UnacknowledgedPurchased);
+    const uint64_t coinId = coin.id();
+    passItem = m_items.find(previousPassItem.id());
+
+    CSOAccountSeasonalOperation operation;
+    operation.set_season_value(pass.seasonValue);
+    operation.set_tier_unlocked(0);
+    operation.set_premium_tiers(0);
+    operation.set_mission_id(0);
+    operation.set_missions_completed(0);
+    operation.set_redeemable_balance(0);
+    operation.set_season_pass_time(static_cast<uint32_t>(time(nullptr)));
+    auto [operationIt, inserted] = m_seasonalOperations.emplace(pass.seasonValue, operation);
+    if (!inserted)
+    {
+        m_items.erase(coinId);
+        m_lastHighItemId = previousLastHighItemId;
+        return false;
+    }
+
+    DestroyItem(passItem, result.destroy);
+    ToSingleObject(result.itemData, coin);
+    result.itemChange = UseItemChange::Create;
+    ToSingleObject(result.operationData, SOTypeAccountSeasonalOperation, operationIt->second);
+    result.operationChange = UseItemChange::Create;
+    result.notification.add_item_id(coinId);
+    result.notification.set_request(k_EGCItemCustomizationNotification_ActivateOperationCoin);
+
+    if (WriteToFile())
+    {
+        return true;
+    }
+
+    m_items.erase(coinId);
+    m_items.emplace(previousPassItem.id(), previousPassItem);
+    m_seasonalOperations.erase(pass.seasonValue);
+    m_lastHighItemId = previousLastHighItemId;
+    m_version = previousVersion;
+    result = UseItemResult{};
+    return false;
 }
 
 bool Inventory::ActivateTournamentAccessItem(ItemMap::iterator accessItem,
