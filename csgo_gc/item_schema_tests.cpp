@@ -240,6 +240,51 @@ public:
             && generatedValue(ItemSchema::AttributeOperationDropsAwardedRedeemed) == 0;
     }
 
+    bool ParseSeasonalOperationData()
+    {
+        KeyValue prefabs{ "prefabs" };
+        KeyValue &seasonPass = prefabs.AddSubkey("season_pass");
+        seasonPass.AddSubkey("tool").AddString("type", "season_pass");
+        prefabs.AddSubkey("operation_coin");
+        KeyValue &seasonCoin = prefabs.AddSubkey("season11_coin");
+        seasonCoin.AddString("prefab", "operation_coin");
+        seasonCoin.AddSubkey("attributes").AddNumber("season access", 10);
+
+        KeyValue items{ "items" };
+        KeyValue &pass = items.AddSubkey("4758");
+        pass.AddString("prefab", "season_pass");
+        pass.AddSubkey("attributes").AddNumber("season access", 10);
+
+        KeyValue &bronzeCoin = items.AddSubkey("4759");
+        bronzeCoin.AddString("prefab", "season11_coin");
+        bronzeCoin.AddNumber("min_ilevel", 1);
+        bronzeCoin.AddNumber("max_ilevel", 1);
+
+        KeyValue &silverCoin = items.AddSubkey("4760");
+        silverCoin.AddString("prefab", "season11_coin");
+        silverCoin.AddNumber("min_ilevel", 2);
+        silverCoin.AddNumber("max_ilevel", 2);
+
+        schema.ParseItems(&items, &prefabs);
+
+        KeyValue seasonalOperations{ "seasonaloperations" };
+        KeyValue &riptide = seasonalOperations.AddSubkey("10");
+        riptide.AddSubkey("quest_mission_card").AddNumber("id", 9051);
+        riptide.AddSubkey("quest_mission_card").AddNumber("id", 9052);
+        riptide.AddString("xp_reward", "7,11,15");
+        schema.ParseSeasonalOperations(&seasonalOperations);
+
+        std::optional<SeasonPassInfo> info = schema.SeasonPassByDefIndex(4758);
+        return info
+            && info->seasonValue == 10
+            && info->coinDefIndex == 4759
+            && !schema.SeasonPassByDefIndex(4759)
+            && schema.IsSeasonalMissionCard(10, 9051)
+            && schema.IsSeasonalMissionCard(10, 9052)
+            && !schema.IsSeasonalMissionCard(10, 9053)
+            && !schema.IsSeasonalMissionCard(9, 9051);
+    }
+
     ItemSchema schema;
 };
 
@@ -295,6 +340,12 @@ static bool TournamentAccessUsesSchemaMetadataAndGeneratedAttributes()
     return fixture.ParseTournamentAccessItems();
 }
 
+static bool SeasonalOperationUsesSchemaPassCoinAndMissionCards()
+{
+    ItemSchemaTestFixture fixture;
+    return fixture.ParseSeasonalOperationData();
+}
+
 int main()
 {
     if (!TournamentStickerCapsuleIsNotSouvenir())
@@ -325,6 +376,11 @@ int main()
     if (!TournamentAccessUsesSchemaMetadataAndGeneratedAttributes())
     {
         return 6;
+    }
+
+    if (!SeasonalOperationUsesSchemaPassCoinAndMissionCards())
+    {
+        return 7;
     }
 
     return 0;

@@ -50,6 +50,12 @@ struct TournamentAccessInfo
     uint32_t includedTokens{};
 };
 
+struct SeasonPassInfo
+{
+    uint32_t seasonValue{};
+    uint32_t coinDefIndex{};
+};
+
 class ItemInfo
 {
 public:
@@ -67,7 +73,9 @@ public:
     std::string m_itemType;
     std::vector<std::string> m_prefabs;
     std::vector<GeneratedItemAttribute> m_generatedAttributes;
+    std::string m_toolType;
     std::string m_toolRestriction;
+    std::optional<uint32_t> m_seasonAccess;
     bool m_canSticker;
     bool m_canPatch;
     bool m_nameable;
@@ -198,6 +206,8 @@ public:
     const ItemInfo *ItemInfoByDefIndex(uint32_t defIndex) const;
     const ItemInfo *ItemInfoByName(std::string_view name) const;
     std::optional<TournamentAccessInfo> TournamentAccessByDefIndex(uint32_t defIndex) const;
+    std::optional<SeasonPassInfo> SeasonPassByDefIndex(uint32_t defIndex) const;
+    bool IsSeasonalMissionCard(uint32_t seasonValue, uint32_t missionCardId) const;
     const PaintKitInfo *PaintKitInfoByDefIndex(uint32_t defIndex) const;
     const StickerKitInfo *StickerKitInfoByDefIndex(uint32_t defIndex) const;
     const MusicDefinitionInfo *MusicDefinitionInfoByDefIndex(uint32_t defIndex) const;
@@ -344,6 +354,7 @@ private:
 
     void ParseItems(const KeyValue *itemsKey, const KeyValue *prefabsKey);
     void ParseItemRecursive(ItemInfo &info, const KeyValue &itemKey, const KeyValue *prefabsKey);
+    void ParseSeasonalOperations(const KeyValue *seasonalOperationsKey);
     void ParseAttributes(const KeyValue *attributesKey);
     void ParseStickerKits(const KeyValue *stickerKitsKey);
     void ParsePaintKits(const KeyValue *paintKitsKey);
@@ -365,6 +376,8 @@ private:
     std::unordered_map<uint32_t, AttributeInfo> m_attributeInfo;
     std::unordered_map<std::string, uint32_t> m_itemDefIndexByName;
     std::unordered_map<std::string, uint32_t> m_attributeDefIndexByName;
+    std::unordered_map<uint32_t, uint32_t> m_operationCoinDefIndexBySeason;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> m_missionCardsBySeason;
 
     std::unordered_map<std::string, StickerKitInfo> m_stickerKitInfo;
     std::unordered_map<std::string, PaintKitInfo> m_paintKitInfo;
