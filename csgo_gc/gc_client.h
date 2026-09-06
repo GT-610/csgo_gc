@@ -65,6 +65,7 @@ private:
     void AdjustItemEquippedState(GCMessageRead &messageRead);
     void ClientPlayerDecalSign(GCMessageRead &messageRead);
     void UseItemRequest(GCMessageRead &messageRead);
+    void ClientRequestNewMission(GCMessageRead &messageRead);
     void ClientRequestJoinServerData(GCMessageRead &messageRead);
     void ClientRequestPlayersProfile(GCMessageRead &messageRead);
     void SetEventFavorite(GCMessageRead &messageRead);

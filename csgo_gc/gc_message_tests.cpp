@@ -2620,6 +2620,143 @@ static bool SeasonPassActivationCreatesAndPersistsOperationState()
     return valid;
 }
 
+static bool WaitForSeasonalOperationUpdate(ClientGC &gc, uint32_t seasonValue,
+    uint32_t missionCardId, CSOAccountSeasonalOperation &clientOperation,
+    CSOAccountSeasonalOperation &serverOperation)
+{
+    bool receivedClientUpdate = false;
+    bool receivedServerUpdate = false;
+    std::vector<EventData> events;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 1 };
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        gc.GetHostEvents(events);
+        for (const EventData &event : events)
+        {
+            if (event.type != static_cast<int>(HostEvent::Message)
+                && event.type != static_cast<int>(HostEvent::NetMessage))
+            {
+                continue;
+            }
+
+            GCMessageRead messageRead{
+                0, event.buffer.data(), static_cast<uint32_t>(event.buffer.size())
+            };
+            if (!messageRead.IsValid() || !messageRead.IsProtobuf()
+                || messageRead.TypeUnmasked() != k_ESOMsg_Update)
+            {
+                continue;
+            }
+
+            CMsgSOSingleObject update;
+            CSOAccountSeasonalOperation operation;
+            if (!messageRead.ReadProtobuf(update)
+                || update.type_id() != SOTypeAccountSeasonalOperation
+                || !operation.ParseFromString(update.object_data())
+                || operation.season_value() != seasonValue
+                || operation.mission_id() != missionCardId)
+            {
+                continue;
+            }
+
+            if (event.type == static_cast<int>(HostEvent::Message))
+            {
+                clientOperation = std::move(operation);
+                receivedClientUpdate = true;
+            }
+            else
+            {
+                serverOperation = std::move(operation);
+                receivedServerUpdate = true;
+            }
+        }
+
+        if (receivedClientUpdate && receivedServerUpdate)
+        {
+            return true;
+        }
+
+        events.clear();
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+    }
+
+    return false;
+}
+
+static bool SeasonalMissionCardSelectionValidatesAndPersists()
+{
+    constexpr uint64_t SteamId = 76561197960265729ull;
+    RemoveSeasonalOperationFixtures();
+    if (!WriteSeasonalOperationFixtures())
+    {
+        RemoveSeasonalOperationFixtures();
+        return false;
+    }
+
+    const uint64_t passId = TournamentFixtureItemId(SteamId, 1);
+    bool valid = true;
+    {
+        ClientGC gc{ SteamId };
+        CMsgGCCstrike15_v2_ClientRequestNewMission missionRequest;
+        missionRequest.set_campaign_id(10);
+        missionRequest.set_mission_id(9051);
+        SendGCProtobuf(gc,
+            k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
+        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+
+        CMsgUseItem passRequest;
+        passRequest.set_item_id(passId);
+        SendGCProtobuf(gc, k_EMsgGCUseItemRequest, passRequest);
+        std::vector<EventData> activationEvents;
+        valid &= WaitForHostMessagesUntil(gc,
+            k_EMsgGCItemCustomizationNotification, activationEvents);
+
+        missionRequest.set_campaign_id(9);
+        SendGCProtobuf(gc,
+            k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
+        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+
+        missionRequest.set_campaign_id(10);
+        missionRequest.set_mission_id(9999);
+        SendGCProtobuf(gc,
+            k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
+        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+
+        missionRequest.set_mission_id(9052);
+        SendGCProtobuf(gc,
+            k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
+        CSOAccountSeasonalOperation clientOperation;
+        CSOAccountSeasonalOperation serverOperation;
+        valid &= WaitForSeasonalOperationUpdate(gc, 10, 9052,
+                clientOperation, serverOperation)
+            && clientOperation.SerializeAsString() == serverOperation.SerializeAsString();
+
+        SendGCProtobuf(gc,
+            k_EMsgGCCStrike15_v2_ClientRequestNewMission, missionRequest);
+        valid &= HostMessageNotReceived(gc, k_ESOMsg_Update);
+    }
+
+    {
+        Inventory persisted{ SteamId };
+        const CSOAccountSeasonalOperation *operation = persisted.GetSeasonalOperation(10);
+        valid &= operation && operation->mission_id() == 9052;
+
+        CMsgSOCacheSubscribed clientSubscription;
+        CMsgSOCacheSubscribed serverSubscription;
+        persisted.BuildCacheSubscription(clientSubscription, false);
+        persisted.BuildCacheSubscription(serverSubscription, true);
+        CSOAccountSeasonalOperation clientOperation;
+        CSOAccountSeasonalOperation serverOperation;
+        valid &= FindSeasonalOperation(clientSubscription, 10, clientOperation)
+            && FindSeasonalOperation(serverSubscription, 10, serverOperation)
+            && clientOperation.mission_id() == 9052
+            && clientOperation.SerializeAsString() == serverOperation.SerializeAsString();
+    }
+
+    RemoveSeasonalOperationFixtures();
+    return valid;
+}
+
 static bool RequestEventFavorites(ClientGC &gc, bool allEvents, uint64_t jobId,
     std::string_view expectedFavorites)
 {
@@ -2724,6 +2861,8 @@ int main()
             SouvenirTokenInitializesMissingPurchasedCount },
         { "SeasonPassActivationCreatesAndPersistsOperationState",
             SeasonPassActivationCreatesAndPersistsOperationState },
+        { "SeasonalMissionCardSelectionValidatesAndPersists",
+            SeasonalMissionCardSelectionValidatesAndPersists },
         { "EventFavoritesPersistAndPreserveRequestJobs",
             EventFavoritesPersistAndPreserveRequestJobs },
     };

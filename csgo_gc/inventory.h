@@ -92,6 +92,8 @@ public:
     };
 
     bool UseItem(uint64_t itemId, UseItemResult &result);
+    bool SelectSeasonalMissionCard(uint32_t seasonValue, uint32_t missionCardId,
+        CMsgSOSingleObject &update);
 
     bool UnlockCrate(uint64_t crateId,
         uint64_t keyId,

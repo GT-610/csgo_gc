@@ -1059,6 +1059,37 @@ bool Inventory::UseItem(uint64_t itemId, UseItemResult &result)
     return true;
 }
 
+bool Inventory::SelectSeasonalMissionCard(uint32_t seasonValue,
+    uint32_t missionCardId, CMsgSOSingleObject &update)
+{
+    auto operation = m_seasonalOperations.find(seasonValue);
+    if (operation == m_seasonalOperations.end()
+        || !m_itemSchema.IsSeasonalMissionCard(seasonValue, missionCardId))
+    {
+        return false;
+    }
+
+    if (operation->second.mission_id() == missionCardId)
+    {
+        return true;
+    }
+
+    const uint64_t previousVersion = m_version;
+    const CSOAccountSeasonalOperation previousOperation = operation->second;
+    operation->second.set_mission_id(missionCardId);
+    ToSingleObject(update, SOTypeAccountSeasonalOperation, operation->second);
+
+    if (WriteToFile())
+    {
+        return true;
+    }
+
+    operation->second = previousOperation;
+    m_version = previousVersion;
+    update.Clear();
+    return false;
+}
+
 bool Inventory::ActivateSeasonPassItem(ItemMap::iterator passItem,
     const SeasonPassInfo &pass, UseItemResult &result)
 {

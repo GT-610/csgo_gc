@@ -993,6 +993,10 @@ void ClientGC::HandleMessage(uint32_t type, const void *data, uint32_t size)
             UseItemRequest(messageRead);
             break;
 
+        case k_EMsgGCCStrike15_v2_ClientRequestNewMission:
+            ClientRequestNewMission(messageRead);
+            break;
+
         case k_EMsgGCCStrike15_v2_ClientRequestJoinServerData:
             ClientRequestJoinServerData(messageRead);
             break;
@@ -1554,6 +1558,24 @@ void ClientGC::UseItemRequest(GCMessageRead &messageRead)
         }
 
         SendMessageToGame(false, k_EMsgGCItemCustomizationNotification, result.notification);
+    }
+}
+
+void ClientGC::ClientRequestNewMission(GCMessageRead &messageRead)
+{
+    CMsgGCCstrike15_v2_ClientRequestNewMission request;
+    if (!messageRead.ReadProtobuf(request))
+    {
+        Platform::Print("Parsing CMsgGCCstrike15_v2_ClientRequestNewMission failed, ignoring\n");
+        return;
+    }
+
+    CMsgSOSingleObject update;
+    if (m_inventory.SelectSeasonalMissionCard(
+            request.campaign_id(), request.mission_id(), update)
+        && update.has_object_data())
+    {
+        SendMessageToGame(true, k_ESOMsg_Update, update);
     }
 }
 
