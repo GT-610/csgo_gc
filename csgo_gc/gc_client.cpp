@@ -1541,6 +1541,13 @@ void ClientGC::UseItemRequest(GCMessageRead &messageRead)
                     ? k_ESOMsg_Create : k_ESOMsg_Update,
                 result.itemData);
         }
+        if (result.operationChange != Inventory::UseItemChange::None)
+        {
+            SendMessageToGame(true,
+                result.operationChange == Inventory::UseItemChange::Create
+                    ? k_ESOMsg_Create : k_ESOMsg_Update,
+                result.operationData);
+        }
         if (result.updateMultiple.objects_modified_size())
         {
             SendMessageToGame(true, k_ESOMsg_UpdateMultiple, result.updateMultiple);

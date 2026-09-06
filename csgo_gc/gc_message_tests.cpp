@@ -2414,6 +2414,212 @@ static bool SouvenirTokenInitializesMissingPurchasedCount()
     return valid;
 }
 
+static void RemoveSeasonalOperationFixtures()
+{
+    TestFilesystem::RemoveFile("csgo_gc/inventory.txt");
+    TestFilesystem::RemoveFile("csgo_gc/unusual_loot_lists.txt");
+    TestFilesystem::RemoveFile("csgo_gc/gc_loot_lists.txt");
+    TestFilesystem::RemoveFile("csgo/scripts/items/items_game.txt");
+    TestFilesystem::RemoveDirectory("csgo/scripts/items");
+    TestFilesystem::RemoveDirectory("csgo/scripts");
+    TestFilesystem::RemoveDirectory("csgo");
+    TestFilesystem::RemoveDirectory("csgo_gc");
+}
+
+static bool WriteSeasonalOperationFixtures()
+{
+    if (!TestFilesystem::MakeDirectory("csgo")
+        || !TestFilesystem::MakeDirectory("csgo/scripts")
+        || !TestFilesystem::MakeDirectory("csgo/scripts/items")
+        || !TestFilesystem::MakeDirectory("csgo_gc"))
+    {
+        return false;
+    }
+
+    KeyValue schema{ "root" };
+    KeyValue &itemsGame = schema.AddSubkey("items_game");
+    KeyValue &prefabs = itemsGame.AddSubkey("prefabs");
+    KeyValue &seasonPass = prefabs.AddSubkey("season_pass");
+    seasonPass.AddSubkey("tool").AddString("type", "season_pass");
+    prefabs.AddSubkey("operation_coin");
+    KeyValue &seasonCoin = prefabs.AddSubkey("season11_coin");
+    seasonCoin.AddString("prefab", "operation_coin");
+    seasonCoin.AddSubkey("attributes").AddNumber("season access", 10);
+
+    KeyValue &items = itemsGame.AddSubkey("items");
+    KeyValue &pass = items.AddSubkey("4758");
+    pass.AddString("name", "CommunitySeasonEleven2021");
+    pass.AddString("prefab", "season_pass");
+    pass.AddSubkey("attributes").AddNumber("season access", 10);
+
+    KeyValue &coin = items.AddSubkey("4759");
+    coin.AddString("name", "CommunitySeasonEleven2021 Coin 1");
+    coin.AddString("prefab", "season11_coin");
+    coin.AddNumber("min_ilevel", 1);
+    coin.AddNumber("max_ilevel", 1);
+
+    KeyValue &operation = itemsGame.AddSubkey("seasonaloperations").AddSubkey("10");
+    operation.AddSubkey("quest_mission_card").AddNumber("id", 9051);
+    operation.AddSubkey("quest_mission_card").AddNumber("id", 9052);
+
+    KeyValue inventory{ "inventory" };
+    inventory.AddNumber("format_version", 1);
+    KeyValue &inventoryItems = inventory.AddSubkey("items");
+    for (uint32_t highItemId = 1; highItemId <= 2; highItemId++)
+    {
+        KeyValue &item = inventoryItems.AddSubkey(std::to_string(highItemId));
+        item.AddNumber("def_index", 4758);
+        item.AddNumber("origin", ItemOriginPurchased);
+    }
+
+    KeyValue unusualLootLists{ "unusual_loot_lists" };
+    KeyValue gcLootLists{ "gc_loot_lists" };
+    return schema.WriteToFile("csgo/scripts/items/items_game.txt")
+        && inventory.WriteToFile("csgo_gc/inventory.txt")
+        && unusualLootLists.WriteToFile("csgo_gc/unusual_loot_lists.txt")
+        && gcLootLists.WriteToFile("csgo_gc/gc_loot_lists.txt");
+}
+
+static bool FindSeasonalOperation(const CMsgSOCacheSubscribed &subscription,
+    uint32_t seasonValue, CSOAccountSeasonalOperation &result)
+{
+    for (const CMsgSOCacheSubscribed_SubscribedType &type : subscription.objects())
+    {
+        if (type.type_id() != SOTypeAccountSeasonalOperation)
+        {
+            continue;
+        }
+
+        for (const std::string &data : type.object_data())
+        {
+            CSOAccountSeasonalOperation operation;
+            if (operation.ParseFromString(data) && operation.season_value() == seasonValue)
+            {
+                result = std::move(operation);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool SeasonPassActivationCreatesAndPersistsOperationState()
+{
+    constexpr uint64_t SteamId = 76561197960265729ull;
+    RemoveSeasonalOperationFixtures();
+    if (!WriteSeasonalOperationFixtures())
+    {
+        RemoveSeasonalOperationFixtures();
+        return false;
+    }
+
+    const uint64_t passId = TournamentFixtureItemId(SteamId, 1);
+    const uint64_t duplicatePassId = TournamentFixtureItemId(SteamId, 2);
+    uint64_t coinId = 0;
+    bool valid = true;
+    {
+        ClientGC gc{ SteamId };
+        CMsgUseItem request;
+        request.set_item_id(passId);
+        SendGCProtobuf(gc, k_EMsgGCUseItemRequest, request);
+
+        std::vector<EventData> events;
+        valid &= WaitForHostMessagesUntil(gc,
+            k_EMsgGCItemCustomizationNotification, events);
+
+        size_t destroyIndex = events.size();
+        size_t coinIndex = events.size();
+        size_t operationIndex = events.size();
+        size_t notificationIndex = events.size();
+        CSOAccountSeasonalOperation operation;
+        for (size_t i = 0; i < events.size(); i++)
+        {
+            const uint32_t type = static_cast<uint32_t>(events[i].id) & ~ProtobufMask;
+            if (type == k_ESOMsg_Destroy)
+            {
+                CMsgSOSingleObject object;
+                CSOEconItem destroyed;
+                valid &= ParseHostProtobuf(events[i], object)
+                    && ParseItemObject(object, destroyed)
+                    && destroyed.id() == passId;
+                destroyIndex = i;
+            }
+            else if (type == k_ESOMsg_Create)
+            {
+                CMsgSOSingleObject object;
+                valid &= ParseHostProtobuf(events[i], object);
+                if (object.type_id() == SOTypeItem)
+                {
+                    CSOEconItem coin;
+                    valid &= coin.ParseFromString(object.object_data())
+                        && coin.def_index() == 4759;
+                    coinId = coin.id();
+                    coinIndex = i;
+                }
+                else if (object.type_id() == SOTypeAccountSeasonalOperation)
+                {
+                    valid &= operation.ParseFromString(object.object_data());
+                    operationIndex = i;
+                }
+            }
+            else if (type == k_EMsgGCItemCustomizationNotification)
+            {
+                CMsgGCItemCustomizationNotification notification;
+                valid &= ParseHostProtobuf(events[i], notification)
+                    && notification.request()
+                        == k_EGCItemCustomizationNotification_ActivateOperationCoin
+                    && notification.item_id_size() == 1;
+                if (notification.item_id_size() == 1)
+                {
+                    valid &= notification.item_id(0) == coinId;
+                }
+                notificationIndex = i;
+            }
+        }
+
+        valid &= destroyIndex < coinIndex
+            && coinIndex < operationIndex
+            && operationIndex < notificationIndex
+            && operation.season_value() == 10
+            && operation.tier_unlocked() == 0
+            && operation.premium_tiers() == 0
+            && operation.mission_id() == 0
+            && operation.missions_completed() == 0
+            && operation.redeemable_balance() == 0
+            && operation.season_pass_time() != 0;
+
+        request.set_item_id(duplicatePassId);
+        SendGCProtobuf(gc, k_EMsgGCUseItemRequest, request);
+        valid &= HostMessageNotReceived(gc, k_EMsgGCItemCustomizationNotification);
+    }
+
+    {
+        Inventory persisted{ SteamId };
+        const CSOAccountSeasonalOperation *operation = persisted.GetSeasonalOperation(10);
+        valid &= !persisted.GetItem(passId)
+            && persisted.GetItem(duplicatePassId)
+            && persisted.GetItem(coinId)
+            && persisted.GetItem(coinId)->def_index() == 4759
+            && operation
+            && operation->season_value() == 10
+            && operation->season_pass_time() != 0;
+
+        CMsgSOCacheSubscribed clientSubscription;
+        CMsgSOCacheSubscribed serverSubscription;
+        persisted.BuildCacheSubscription(clientSubscription, false);
+        persisted.BuildCacheSubscription(serverSubscription, true);
+        CSOAccountSeasonalOperation clientOperation;
+        CSOAccountSeasonalOperation serverOperation;
+        valid &= FindSeasonalOperation(clientSubscription, 10, clientOperation)
+            && FindSeasonalOperation(serverSubscription, 10, serverOperation)
+            && clientOperation.SerializeAsString() == serverOperation.SerializeAsString();
+    }
+
+    RemoveSeasonalOperationFixtures();
+    return valid;
+}
+
 static bool RequestEventFavorites(ClientGC &gc, bool allEvents, uint64_t jobId,
     std::string_view expectedFavorites)
 {
@@ -2516,6 +2722,8 @@ int main()
             ViewerPassTokenPacksUpdatePersistedJournal },
         { "SouvenirTokenInitializesMissingPurchasedCount",
             SouvenirTokenInitializesMissingPurchasedCount },
+        { "SeasonPassActivationCreatesAndPersistsOperationState",
+            SeasonPassActivationCreatesAndPersistsOperationState },
         { "EventFavoritesPersistAndPreserveRequestJobs",
             EventFavoritesPersistAndPreserveRequestJobs },
     };
