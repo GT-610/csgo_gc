@@ -303,7 +303,7 @@ static bool HostMessageNotReceived(ClientGC &gc, uint32_t type,
 }
 
 static bool HostMessageOrNetMessageNotReceived(ClientGC &gc, uint32_t type,
-    std::chrono::milliseconds duration = std::chrono::milliseconds{ 100 })
+    std::chrono::milliseconds duration = std::chrono::seconds{ 1 })
 {
     std::vector<EventData> events;
     auto deadline = std::chrono::steady_clock::now() + duration;
